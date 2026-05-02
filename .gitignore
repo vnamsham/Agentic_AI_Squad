@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Project data (contains user tokens and generated code — never commit)
+backend/data/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+
+# Build output
+dist/
+build/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
