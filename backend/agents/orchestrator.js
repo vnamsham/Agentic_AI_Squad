@@ -6,6 +6,7 @@ import { readFile, writeFile, mkdir, access, rm } from 'fs/promises';
 import { join, dirname } from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import ExcelJS from 'exceljs';
 import * as github from '../connectors/github.js';
 import * as jira from '../connectors/jira.js';
 import * as confluence from '../connectors/confluence.js';
@@ -151,9 +152,10 @@ async function parseAndSaveFiles(output, project, runId, emit) {
     return [];
   }
 
+  const projectFolder = project.dataFolder || project.id;
   const baseDir = runId
-    ? join(DATA_DIR, project.id, 'runs', runId, 'generated-code')
-    : join(DATA_DIR, project.id, 'generated-code');
+    ? join(DATA_DIR, projectFolder, 'runs', runId, 'generated-code')
+    : join(DATA_DIR, projectFolder, 'generated-code');
 
   // Clean up previous run before saving new files
   await rm(baseDir, { recursive: true, force: true });
@@ -176,7 +178,7 @@ async function parseAndSaveFiles(output, project, runId, emit) {
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
-function runCommand(cmd, args, cwd, logFn) {
+function runCommand(cmd, args, cwd, logFn, timeoutMs = 120_000) {
   return new Promise((resolve) => {
     logFn(`$ ${cmd} ${args.join(' ')}`);
     const proc = spawn(cmd, args, {
@@ -184,6 +186,22 @@ function runCommand(cmd, args, cwd, logFn) {
       env: { ...process.env, PYTHONUNBUFFERED: '1' }
     });
     let output = '';
+    let settled = false;
+
+    const done = (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code, output });
+    };
+
+    const timer = setTimeout(() => {
+      if (!settled) {
+        logFn(`⚠ Command timed out after ${timeoutMs / 1000}s — killing process`);
+        proc.kill('SIGKILL');
+        done(-1);
+      }
+    }, timeoutMs);
 
     const handleData = (data) => {
       const text = data.toString().replace(ANSI_RE, '');
@@ -193,8 +211,8 @@ function runCommand(cmd, args, cwd, logFn) {
 
     proc.stdout.on('data', handleData);
     proc.stderr.on('data', handleData);
-    proc.on('close', (code) => resolve({ code, output }));
-    proc.on('error', (err) => resolve({ code: -1, output: err.message }));
+    proc.on('close', (code) => done(code));
+    proc.on('error', (err) => { output += err.message; done(-1); });
   });
 }
 
@@ -217,9 +235,123 @@ async function fileExists(filePath) {
   try { await access(filePath); return true; } catch { return false; }
 }
 
+async function loadTestResults(baseDir) {
+  try {
+    const raw = await readFile(join(baseDir, 'test-report.json'), 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function formatTestResults(testResults) {
+  if (!testResults) return '(No test results available)';
+  const s = testResults.summary || {};
+  const lines = [
+    '## Pytest Execution Results',
+    `- **Total:** ${s.total || 0} | **Passed:** ${s.passed || 0} | **Failed:** ${s.failed || 0} | **Skipped:** ${s.skipped || 0}`,
+    `- **Duration:** ${(testResults.duration || 0).toFixed(2)}s`,
+    `- **Overall:** ${(s.failed || 0) === 0 ? '✓ ALL TESTS PASSED' : `✗ ${s.failed} TEST(S) FAILED`}`,
+    '',
+    '### Individual Test Results',
+    ''
+  ];
+  (testResults.tests || []).forEach(test => {
+    const status = test.outcome === 'passed' ? '✓ PASS' : test.outcome === 'failed' ? '✗ FAIL' : '⚠ SKIP';
+    const duration = ((test.call?.duration || 0) * 1000).toFixed(0);
+    lines.push(`- ${status} | \`${test.nodeid}\` | ${duration}ms`);
+    if (test.outcome === 'failed') {
+      const err = (test.call?.longrepr || test.setup?.longrepr || '').split('\n').slice(0, 5).join('\n  ');
+      if (err) lines.push(`  **Error:**\n  ${err}`);
+    }
+  });
+  return lines.join('\n');
+}
+
+async function createTestExcel(testResults, project, storyKey, baseDir, emit) {
+  const log = (message) => emit('pipeline_log', { message });
+  if (!testResults) {
+    log('⚠ No test results available — skipping Excel report generation');
+    return null;
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Agentic AI Squad';
+  workbook.created = new Date();
+
+  // ── Summary Sheet ──────────────────────────────────────────────────────────
+  const summarySheet = workbook.addWorksheet('Summary');
+  summarySheet.columns = [
+    { header: 'Field', key: 'field', width: 30 },
+    { header: 'Value', key: 'value', width: 45 }
+  ];
+  const hdrRow = summarySheet.getRow(1);
+  hdrRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  hdrRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
+
+  const s = testResults.summary || {};
+  const passed = s.passed || 0;
+  const failed = s.failed || 0;
+  const overall = failed === 0 ? 'PASS' : 'FAIL';
+  summarySheet.addRows([
+    { field: 'Project',         value: project.name },
+    { field: 'Jira Story',      value: storyKey },
+    { field: 'Execution Date',  value: new Date().toLocaleString() },
+    { field: 'Total Tests',     value: s.total || 0 },
+    { field: 'Passed',          value: passed },
+    { field: 'Failed',          value: failed },
+    { field: 'Skipped',         value: s.skipped || 0 },
+    { field: 'Duration (s)',    value: parseFloat((testResults.duration || 0).toFixed(2)) },
+    { field: 'Overall Status',  value: overall }
+  ]);
+  const statusCell = summarySheet.getCell(`B${summarySheet.rowCount}`);
+  statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: overall === 'PASS' ? 'FF00B050' : 'FFFF0000' } };
+  statusCell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+
+  // ── Test Cases Sheet ───────────────────────────────────────────────────────
+  const tcSheet = workbook.addWorksheet('Test Cases');
+  tcSheet.columns = [
+    { header: '#',             key: 'id',       width: 6  },
+    { header: 'Test Name',     key: 'name',     width: 55 },
+    { header: 'Module / File', key: 'module',   width: 35 },
+    { header: 'Status',        key: 'status',   width: 12 },
+    { header: 'Duration (ms)', key: 'duration', width: 16 },
+    { header: 'Error / Notes', key: 'error',    width: 65 }
+  ];
+  const tcHdr = tcSheet.getRow(1);
+  tcHdr.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  tcHdr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
+  tcHdr.alignment = { horizontal: 'center' };
+
+  (testResults.tests || []).forEach((test, i) => {
+    const outcome = test.outcome === 'passed' ? 'PASS' : test.outcome === 'failed' ? 'FAIL' : 'SKIP';
+    const parts = (test.nodeid || '').split('::');
+    const row = tcSheet.addRow({
+      id:       i + 1,
+      name:     parts.slice(1).join(' > ') || test.nodeid,
+      module:   parts[0] || '',
+      status:   outcome,
+      duration: Math.round((test.call?.duration || 0) * 1000),
+      error:    (test.call?.longrepr || test.setup?.longrepr || '').substring(0, 250)
+    });
+    const sc = row.getCell('status');
+    const colors = { PASS: 'FF00B050', FAIL: 'FFFF0000', SKIP: 'FFFFC000' };
+    sc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors[outcome] } };
+    sc.font = { bold: true, color: { argb: outcome === 'SKIP' ? 'FF000000' : 'FFFFFFFF' } };
+    sc.alignment = { horizontal: 'center' };
+    row.getCell('error').alignment = { wrapText: true };
+  });
+
+  const excelPath = join(baseDir, 'test-cases.xlsx');
+  await workbook.xlsx.writeFile(excelPath);
+  log(`📊 Excel test report saved: test-cases.xlsx (${(testResults.tests || []).length} test cases)`);
+  return excelPath;
+}
+
 async function executeGeneratedCode(savedFiles, baseDir, emit) {
   const logLines = [];
   const log = (message) => { logLines.push(message); emit('pipeline_log', { message }); };
+  let testResults = null;
 
   log('──────────────────────────────────────');
   log('▶ Executing generated code...');
@@ -228,19 +360,41 @@ async function executeGeneratedCode(savedFiles, baseDir, emit) {
   log(`Detected language: ${lang} | Root: ${root}`);
 
   if (lang === 'python') {
+    const PIP_TRUSTED = ['--trusted-host', 'pypi.org', '--trusted-host', 'files.pythonhosted.org', '--trusted-host', 'pypi.python.org'];
+
     if (await fileExists(join(root, 'requirements.txt'))) {
       log('📦 Installing Python dependencies...');
-      const install = await runCommand('py', ['-m', 'pip', 'install', '-r', 'requirements.txt', '-q', '--disable-pip-version-check'], root, log);
+      const install = await runCommand('py', ['-m', 'pip', 'install', '-r', 'requirements.txt', '-q', '--disable-pip-version-check', ...PIP_TRUSTED], root, log);
       if (install.code !== 0) { log('✗ Dependency installation failed.'); return; }
       log('✓ Dependencies installed.');
     }
 
     const hasTests = savedFiles.some(f => f.includes('test') && f.endsWith('.py'));
+    let jsonReportAvailable = false;
     if (hasTests) {
-      const pytestCheck = await runCommand('py', ['-m', 'pytest', '--version'], root, log);
-      if (pytestCheck.code !== 0) {
-        log('📦 Installing pytest...');
-        await runCommand('py', ['-m', 'pip', 'install', 'pytest', '-q', '--disable-pip-version-check'], root, log);
+      const depsMarker = join(DATA_DIR, '.pytest-deps-ready');
+      if (!await fileExists(depsMarker)) {
+        const pytestCheck = await runCommand('py', ['-m', 'pytest', '--version'], root, log);
+        if (pytestCheck.code !== 0) {
+          log('📦 Installing pytest...');
+          await runCommand('py', ['-m', 'pip', 'install', 'pytest', '-q', '--disable-pip-version-check', ...PIP_TRUSTED], root, log);
+        }
+        const jsonReportCheck = await runCommand('py', ['-m', 'pip', 'show', 'pytest-json-report', '-q'], root, log);
+        if (jsonReportCheck.code !== 0) {
+          log('📦 Installing pytest-json-report...');
+          const installed = await runCommand('py', ['-m', 'pip', 'install', 'pytest-json-report', '-q', '--disable-pip-version-check', ...PIP_TRUSTED], root, log);
+          jsonReportAvailable = installed.code === 0;
+        } else {
+          jsonReportAvailable = true;
+        }
+        if (jsonReportAvailable) {
+          await writeFile(depsMarker, new Date().toISOString(), 'utf-8');
+          log('✓ Python test dependencies ready.');
+        } else {
+          log('⚠ pytest-json-report unavailable — running tests without JSON report.');
+        }
+      } else {
+        jsonReportAvailable = true;
       }
     }
 
@@ -278,8 +432,20 @@ async function executeGeneratedCode(savedFiles, baseDir, emit) {
 
     if (hasTests) {
       log('🧪 Running pytest...');
-      const result = await runCommand('py', ['-m', 'pytest', '-v', '-s', '--tb=short', '--color=no'], root, log);
+      const pytestArgs = ['-m', 'pytest', '-v', '-s', '--tb=short', '--color=no'];
+      if (jsonReportAvailable) pytestArgs.push('--json-report', '--json-report-file=test-report.json');
+      const result = await runCommand('py', pytestArgs, root, log);
       log(result.code === 0 ? '✓ All tests passed!' : `✗ Some tests failed (exit code ${result.code})`);
+      if (jsonReportAvailable) {
+        try {
+          const raw = await readFile(join(root, 'test-report.json'), 'utf-8');
+          testResults = JSON.parse(raw);
+          const sr = testResults.summary || {};
+          log(`📊 Test results: ${sr.passed || 0} passed, ${sr.failed || 0} failed, ${sr.total || 0} total`);
+        } catch {
+          log('⚠ Could not parse test report JSON');
+        }
+      }
     } else {
       log('⚠ No test files found — skipping test run.');
     }
@@ -311,6 +477,8 @@ async function executeGeneratedCode(savedFiles, baseDir, emit) {
   // Save execution log to disk
   const logPath = join(baseDir, 'execution-log.txt');
   await writeFile(logPath, logLines.join('\n'), 'utf-8');
+
+  return { testResults };
 }
 
 // ─── Pipeline Runner ─────────────────────────────────────────────────────────
@@ -360,7 +528,7 @@ ${gitContext}`;
     });
 
     try {
-      const output = await runAgent(agent, project, pipelineContext, emit);
+      const output = await runAgent(agent, pipelineContext, emit);
 
       // Store output in pipeline context for next agent
       pipelineContext.previousOutputs[agent.type] = {
@@ -383,9 +551,16 @@ ${gitContext}`;
       if (agent.type === 'developer-agent') {
         const savedFiles = await parseAndSaveFiles(output, project, run.id, emit);
         if (savedFiles.length > 0) {
-          const baseDir = join(DATA_DIR, project.id, 'runs', run.id, 'generated-code');
-          await executeGeneratedCode(savedFiles, baseDir, emit);
+          const baseDir = join(DATA_DIR, project.dataFolder || project.id, 'runs', run.id, 'generated-code');
+          const { testResults } = await executeGeneratedCode(savedFiles, baseDir, emit);
+          pipelineContext.testResults = testResults;
+          pipelineContext.generatedCodeDir = baseDir;
         }
+      }
+
+      // After tester agent: generate Excel test report
+      if (agent.type === 'tester-agent' && pipelineContext.testResults && pipelineContext.generatedCodeDir) {
+        await createTestExcel(pipelineContext.testResults, project, pipelineContext.jiraStory, pipelineContext.generatedCodeDir, emit);
       }
 
       // Update run step
@@ -451,14 +626,30 @@ export async function runSingleAgent(agent, project, storyKey, previousContext, 
     )
   };
 
-  const output = await runAgent(agent, project, pipelineContext, emit, previousOutputsText);
+  const baseDir = join(DATA_DIR, project.dataFolder || project.id, 'generated-code');
+
+  // For tester agent: load existing test results from the previous developer run
+  if (agent.type === 'tester-agent') {
+    pipelineContext.testResults = await loadTestResults(baseDir);
+    pipelineContext.generatedCodeDir = baseDir;
+    if (pipelineContext.testResults) {
+      emit('pipeline_log', { message: `📊 Loaded existing test results: ${pipelineContext.testResults.summary?.total || 0} tests` });
+    }
+  }
+
+  const output = await runAgent(agent, pipelineContext, emit, previousOutputsText);
 
   if (agent.type === 'developer-agent') {
     const savedFiles = await parseAndSaveFiles(output, project, null, emit);
     if (savedFiles.length > 0) {
-      const baseDir = join(DATA_DIR, project.id, 'generated-code');
-      await executeGeneratedCode(savedFiles, baseDir, emit);
+      const { testResults } = await executeGeneratedCode(savedFiles, baseDir, emit);
+      pipelineContext.testResults = testResults;
+      pipelineContext.generatedCodeDir = baseDir;
     }
+  }
+
+  if (agent.type === 'tester-agent' && pipelineContext.testResults && pipelineContext.generatedCodeDir) {
+    await createTestExcel(pipelineContext.testResults, project, storyKey, pipelineContext.generatedCodeDir, emit);
   }
 
   return output;
@@ -466,7 +657,7 @@ export async function runSingleAgent(agent, project, storyKey, previousContext, 
 
 // ─── Individual Agent Runner ─────────────────────────────────────────────────
 
-async function runAgent(agent, project, pipelineContext, emit, previousOutputsOverride) {
+async function runAgent(agent, pipelineContext, emit, previousOutputsOverride) {
   const { systemPrompt, instructions } = await loadTemplate(agent.templateType || agent.type);
 
   // Build the user message combining all context
@@ -508,6 +699,11 @@ function buildAgentMessage(agent, pipelineContext, previousOutputsText, instruct
   // Previous agent outputs (if any)
   if (previousOutputsText) {
     parts.push(`\n---\n\n# Previous Agent Outputs\n\n${previousOutputsText}`);
+  }
+
+  // Inject actual pytest results for tester agent
+  if (agent.type === 'tester-agent' && pipelineContext.testResults) {
+    parts.push(`\n---\n\n# Actual Test Execution Results (from automated pytest run)\n\n${formatTestResults(pipelineContext.testResults)}`);
   }
 
   // Agent-specific instructions from template

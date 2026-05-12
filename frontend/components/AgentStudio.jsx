@@ -69,7 +69,7 @@ function PipelineBar({ agents, currentIdx, stepStatuses }) {
 
 // ─── Agent Card ────────────────────────────────────────────────────────────────
 
-function AgentCard({ agent, stepIndex, isActive, isLocked, agentStatus, output, onRun, previousContext }) {
+function AgentCard({ agent, stepIndex, isActive, isLocked, agentStatus, output, onRun, onStop }) {
   const meta = getAgentMeta(agent.type);
   const [expanded, setExpanded] = useState(false);
   const outputRef = useRef(null);
@@ -157,7 +157,19 @@ function AgentCard({ agent, stepIndex, isActive, isLocked, agentStatus, output, 
               ↺ Rerun
             </Btn>
           )}
-          {isRunning && <Spinner />}
+          {/* Stop button — visible while running */}
+          {isRunning && (
+            <>
+              <Spinner />
+              <Btn
+                small
+                onClick={(e) => { e.stopPropagation(); onStop(); }}
+                style={{ background: 'var(--red-bg)', color: 'var(--red)', border: '1px solid var(--red-border)' }}
+              >
+                ■ Stop
+              </Btn>
+            </>
+          )}
 
           {/* Expand toggle */}
           {output && (
@@ -242,7 +254,7 @@ export default function AgentStudio() {
     setOutputs(prev => ({ ...prev, [agent.id]: '' }));
     setExecutionLogs([]);
 
-    runAgent(project.id, agent.id, story?.key || story?.summary || '', previousContext, {
+    abortRef.current = runAgent(project.id, agent.id, story?.key || story?.summary || '', previousContext, {
       onToken: (token) => {
         setOutputs(prev => ({ ...prev, [agent.id]: (prev[agent.id] || '') + token }));
       },
@@ -266,6 +278,13 @@ export default function AgentStudio() {
         setGlobalError(data.error || 'Agent execution failed');
       },
     });
+  }
+
+  function handleStop(agentId) {
+    abortRef.current?.();
+    abortRef.current = null;
+    setStepStatuses(prev => ({ ...prev, [agentId]: 'failed' }));
+    setExecutionLogs(prev => [...prev, '⚠ Stopped by user.']);
   }
 
   function handleReset() {
@@ -460,6 +479,7 @@ export default function AgentStudio() {
               agentStatus={status}
               output={outputs[agent.id] || ''}
               onRun={() => handleRun(i)}
+              onStop={() => handleStop(agent.id)}
             />
           );
         })}

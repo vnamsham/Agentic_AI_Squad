@@ -8,6 +8,18 @@ Follow these steps when executing as the Tester Agent.
 - Review the list of suggested test scenarios
 - Understand what the implementation does
 
+## Step 1.5 — Review Actual Test Execution Results
+
+The system has already executed the full test suite via pytest. A structured report is provided in the **"Actual Test Execution Results"** section of your context. Use it as follows:
+
+- Note the overall pass/fail count and duration
+- Identify every FAIL or SKIP result — these require defect entries
+- Read the error messages for failed tests carefully
+- Do **not** guess at actual results — use the data provided
+- Map each test in the report to the corresponding acceptance criterion
+
+When documenting each test case in Step 4, use the real outcome from this report for the **Actual Result** and **Status** fields.
+
 ## Step 2 — Review Original Requirements
 - Re-read the Jira story acceptance criteria
 - Confirm you understand what "done" looks like for this story
@@ -53,7 +65,7 @@ For each test case, document:
 [What should happen]
 
 **Actual Result:**
-[What actually happens based on reviewing the implementation]
+[What actually happened — use the pytest execution results provided in context, not guesses]
 
 **Status:** PASS | FAIL
 **Notes:** [Any observations]
@@ -127,7 +139,9 @@ For each defect found:
 ### Overall Verdict: **PASS** | **FAIL** | **PASS WITH NOTES**
 
 ### Verdict Justification
-[Why you are giving this verdict]
+[Why you are giving this verdict — reference the actual test counts from the execution results]
+
+> Note: The system automatically generates a **test-cases.xlsx** Excel report alongside this analysis. Your structured output here is paired with that machine-readable artifact.
 ```
 
 ## Step 8 — Regression Agent Handoff

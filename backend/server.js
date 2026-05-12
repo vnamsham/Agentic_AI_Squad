@@ -53,12 +53,32 @@ async function fileExists(filePath) {
   }
 }
 
+function slugify(name) {
+  return name.trim().toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .substring(0, 50) || 'project';
+}
+
+function projectDir(project) {
+  return join(DATA_DIR, project.dataFolder || project.id);
+}
+
 async function getProject(id) {
-  return readJSON(join(DATA_DIR, id, 'project.json'));
+  // Fast path: try UUID folder (existing projects) and named folder via index
+  const entries = await readdir(DATA_DIR, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === 'runs') continue;
+    try {
+      const p = await readJSON(join(DATA_DIR, entry.name, 'project.json'));
+      if (p?.id === id) return p;
+    } catch {}
+  }
+  return null;
 }
 
 async function saveProject(project) {
-  const dir = join(DATA_DIR, project.id);
+  const dir = projectDir(project);
   await mkdir(dir, { recursive: true });
   await mkdir(join(dir, 'runs'), { recursive: true });
   await writeJSON(join(dir, 'project.json'), project);
@@ -108,9 +128,20 @@ app.post('/api/projects', async (req, res) => {
     const { name, description, git, jira: jiraConfig, confluence: confluenceConfig } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Project name is required' });
 
+    // Build a unique folder name from the project name
+    const existingFolders = await readdir(DATA_DIR, { withFileTypes: true })
+      .then(e => e.filter(x => x.isDirectory()).map(x => x.name))
+      .catch(() => []);
+    let folderSlug = slugify(name.trim());
+    let suffix = 2;
+    while (existingFolders.includes(folderSlug)) {
+      folderSlug = `${slugify(name.trim())}-${suffix++}`;
+    }
+
     const project = {
       id: uuidv4(),
       name: name.trim(),
+      dataFolder: folderSlug,
       description: description || '',
       git: {
         repoUrl: git?.repoUrl || '',
@@ -180,7 +211,7 @@ app.delete('/api/projects/:id', async (req, res) => {
   try {
     const project = await getProject(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    await rm(join(DATA_DIR, req.params.id), { recursive: true, force: true });
+    await rm(projectDir(project), { recursive: true, force: true });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -472,7 +503,7 @@ app.get('/api/projects/:id/runs', async (req, res) => {
     const project = await getProject(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    const runsDir = join(DATA_DIR, req.params.id, 'runs');
+    const runsDir = join(projectDir(project), 'runs');
     const files = await readdir(runsDir).catch(() => []);
     const runs = [];
     for (const f of files.filter(f => f.endsWith('.json'))) {
@@ -488,8 +519,10 @@ app.get('/api/projects/:id/runs', async (req, res) => {
 
 app.get('/api/projects/:id/runs/:runId', async (req, res) => {
   try {
+    const project = await getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
     const run = await readJSON(
-      join(DATA_DIR, req.params.id, 'runs', `${req.params.runId}.json`)
+      join(projectDir(project), 'runs', `${req.params.runId}.json`)
     );
     if (!run) return res.status(404).json({ error: 'Run not found' });
     res.json(run);
@@ -518,6 +551,12 @@ app.post('/api/projects/:id/stories', async (req, res) => {
     };
 
     if (!project.stories) project.stories = [];
+
+    const duplicate = project.stories.find(s =>
+      key?.trim() ? s.key === key.trim() : s.summary.toLowerCase() === summary.trim().toLowerCase()
+    );
+    if (duplicate) return res.status(409).json({ error: `Story ${key?.trim() || `"${summary.trim()}"`} is already in this project.` });
+
     project.stories.push(story);
     project.updatedAt = new Date().toISOString();
 
@@ -669,7 +708,7 @@ app.post('/api/projects/:id/run', async (req, res) => {
     error: null
   };
 
-  const runsDir = join(DATA_DIR, project.id, 'runs');
+  const runsDir = join(projectDir(project), 'runs');
   await mkdir(runsDir, { recursive: true });
   await writeJSON(join(runsDir, `${runId}.json`), run);
 

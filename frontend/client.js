@@ -51,11 +51,13 @@ export const getRun  = (pid, rid)      => req('GET', `/projects/${pid}/runs/${ri
 
 export function runAgent(projectId, agentId, storyKey, previousContext, callbacks) {
   const { onToken, onComplete, onError, onLog } = callbacks;
+  const controller = new AbortController();
 
   fetch(`${BASE}/projects/${projectId}/run-agent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ agentId, storyKey, previousContext }),
+    signal: controller.signal,
   }).then(res => {
     if (!res.ok) {
       return res.json().then(d => { throw new Error(d.error || 'Run failed'); });
@@ -76,7 +78,7 @@ export function runAgent(projectId, agentId, storyKey, previousContext, callback
           else if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6));
-              if (currentEvent === 'step_token')  onToken?.(data.token);
+              if (currentEvent === 'step_token')   onToken?.(data.token);
               if (currentEvent === 'pipeline_log') onLog?.(data.message);
               if (currentEvent === 'complete')     onComplete?.(data);
               if (currentEvent === 'error')        onError?.(data);
@@ -85,10 +87,16 @@ export function runAgent(projectId, agentId, storyKey, previousContext, callback
           }
         }
         read();
-      }).catch(err => onError?.({ error: err.message }));
+      }).catch(err => {
+        if (err.name !== 'AbortError') onError?.({ error: err.message });
+      });
     }
     read();
-  }).catch(err => onError?.({ error: err.message }));
+  }).catch(err => {
+    if (err.name !== 'AbortError') onError?.({ error: err.message });
+  });
+
+  return () => controller.abort();
 }
 
 // ─── Full pipeline SSE run ────────────────────────────────────────────────────

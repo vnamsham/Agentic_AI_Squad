@@ -58,11 +58,25 @@ export async function getEpic(config, epicKey) {
   return getStory(config, epicKey);
 }
 
+const SEARCH_FIELDS = ['summary', 'issuetype', 'status', 'priority', 'assignee'];
+
 export async function getStoriesInSprint(config, projectKey, maxResults = 20) {
-  const jql = encodeURIComponent(
-    `project = "${projectKey}" AND sprint in openSprints() ORDER BY priority ASC`
-  );
-  const data = await jiraFetch(config, `/search?jql=${jql}&maxResults=${maxResults}`);
+  // Try active sprint first; fall back to all open stories if no sprint exists
+  const notEpic = 'AND issuetype != Epic';
+  let jql = `project = "${projectKey}" ${notEpic} AND sprint in openSprints() ORDER BY priority ASC`;
+  let data = await jiraFetch(config, '/search/jql', {
+    method: 'POST',
+    body: JSON.stringify({ jql, maxResults, fields: SEARCH_FIELDS })
+  });
+
+  if (!data.issues?.length) {
+    jql = `project = "${projectKey}" ${notEpic} AND statusCategory != Done ORDER BY created DESC`;
+    data = await jiraFetch(config, '/search/jql', {
+      method: 'POST',
+      body: JSON.stringify({ jql, maxResults, fields: SEARCH_FIELDS })
+    });
+  }
+
   return data.issues?.map(issue => ({
     key: issue.key,
     summary: issue.fields.summary,
@@ -75,10 +89,10 @@ export async function getStoriesInSprint(config, projectKey, maxResults = 20) {
 }
 
 export async function searchIssues(config, jql, maxResults = 10) {
-  const data = await jiraFetch(
-    config,
-    `/search?jql=${encodeURIComponent(jql)}&maxResults=${maxResults}`
-  );
+  const data = await jiraFetch(config, '/search/jql', {
+    method: 'POST',
+    body: JSON.stringify({ jql, maxResults, fields: SEARCH_FIELDS })
+  });
   return data.issues?.map(issue => ({
     key: issue.key,
     summary: issue.fields.summary,
