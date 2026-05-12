@@ -17,6 +17,40 @@ const DATA_DIR = join(__dirname, '..', 'data');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+
+// ─── Cost Rates ──────────────────────────────────────────────────────────────
+
+const MODEL_RATES = {
+  opus:   {
+    input:     parseFloat(process.env.CLAUDE_OPUS_INPUT_USD_PER_MTOK)      || 15.00,
+    output:    parseFloat(process.env.CLAUDE_OPUS_OUTPUT_USD_PER_MTOK)     || 75.00,
+    cacheRead: parseFloat(process.env.CLAUDE_OPUS_CACHE_READ_USD_PER_MTOK) ||  1.50,
+  },
+  sonnet: {
+    input:     parseFloat(process.env.CLAUDE_SONNET_INPUT_USD_PER_MTOK)      ||  3.00,
+    output:    parseFloat(process.env.CLAUDE_SONNET_OUTPUT_USD_PER_MTOK)     || 15.00,
+    cacheRead: parseFloat(process.env.CLAUDE_SONNET_CACHE_READ_USD_PER_MTOK) ||  0.30,
+  },
+  haiku:  {
+    input:     parseFloat(process.env.CLAUDE_HAIKU_INPUT_USD_PER_MTOK)      ||  0.25,
+    output:    parseFloat(process.env.CLAUDE_HAIKU_OUTPUT_USD_PER_MTOK)     ||  1.25,
+    cacheRead: parseFloat(process.env.CLAUDE_HAIKU_CACHE_READ_USD_PER_MTOK) ||  0.03,
+  },
+};
+
+function computeStepCost(usage, model = '') {
+  const m = model.toLowerCase();
+  const rates =
+    m.includes('haiku')  ? MODEL_RATES.haiku  :
+    m.includes('sonnet') ? MODEL_RATES.sonnet :
+    MODEL_RATES.opus; // default / opus
+
+  const inputCost     = ((usage.inputTokens     || 0) / 1_000_000) * rates.input;
+  const outputCost    = ((usage.outputTokens    || 0) / 1_000_000) * rates.output;
+  const cacheCost     = ((usage.cacheReadTokens || 0) / 1_000_000) * rates.cacheRead;
+  return parseFloat((inputCost + outputCost + cacheCost).toFixed(4));
+}
+
 // ─── Template Loader ────────────────────────────────────────────────────────
 
 async function loadTemplate(templateType) {
