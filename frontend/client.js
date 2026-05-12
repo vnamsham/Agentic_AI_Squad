@@ -47,6 +47,8 @@ export const deleteCustomTemplate  = (id)      => req('DELETE', `/custom-templat
 export const getRuns = (pid)           => req('GET', `/projects/${pid}/runs`);
 export const getRun  = (pid, rid)      => req('GET', `/projects/${pid}/runs/${rid}`);
 
+export const getUsage = (projectId) => req('GET', '/usage' + (projectId ? `?projectId=${projectId}` : ''));
+
 // ─── Single-agent SSE run ─────────────────────────────────────────────────────
 
 export function runAgent(projectId, agentId, storyKey, previousContext, callbacks) {
