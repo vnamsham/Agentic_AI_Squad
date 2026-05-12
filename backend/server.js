@@ -97,6 +97,8 @@ function computeStatus(project) {
 // ─── Status ───────────────────────────────────────────────────────────────────
 
 app.get('/api/status', (req, res) => {
+
+
   res.json({
     status: 'ok',
     version: '1.0.0',
