@@ -18,6 +18,16 @@ const DATA_DIR = join(__dirname, '..', 'data');
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 
+const INPUT_PRICE_PER_MTOK  = parseFloat(process.env.ANTHROPIC_INPUT_PRICE_PER_MTOK  ?? '3.00');
+const OUTPUT_PRICE_PER_MTOK = parseFloat(process.env.ANTHROPIC_OUTPUT_PRICE_PER_MTOK ?? '15.00');
+
+function calcCost(inputTok, outputTok) {
+  return parseFloat(
+    ((inputTok * INPUT_PRICE_PER_MTOK + outputTok * OUTPUT_PRICE_PER_MTOK) / 1_000_000).toFixed(6)
+  );
+}
+
+
 // ─── Cost Rates ──────────────────────────────────────────────────────────────
 
 const MODEL_RATES = {
