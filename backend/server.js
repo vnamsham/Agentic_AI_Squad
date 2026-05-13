@@ -96,6 +96,95 @@ function computeStatus(project) {
 
 // ─── Status ───────────────────────────────────────────────────────────────────
 
+
+// ─── Usage & Cost ─────────────────────────────────────────────────────────────
+
+app.get('/api/usage', async (req, res) => {
+  // NOTE: This is a scan-on-read approach. Add pagination/caching if run count exceeds ~500.
+  try {
+    const { projectId, from, to } = req.query;
+    const fromDate = from ? new Date(from) : null;
+    const toDate   = to   ? new Date(to)   : null;
+
+    const entries = await readdir(DATA_DIR, { withFileTypes: true }).catch(() => []);
+    const runs = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === 'runs') continue;
+
+      let project = null;
+      try {
+        project = await readJSON(join(DATA_DIR, entry.name, 'project.json'));
+      } catch { continue; }
+      if (!project) continue;
+      if (projectId && project.id !== projectId) continue;
+
+      const runsDir = join(DATA_DIR, entry.name, 'runs');
+      let runEntries = [];
+      try {
+        runEntries = await readdir(runsDir, { withFileTypes: true });
+      } catch { continue; }
+
+      for (const runEntry of runEntries) {
+        if (!runEntry.isDirectory()) continue;
+        const runFile = join(runsDir, runEntry.name, 'run.json');
+        let run = null;
+        try { run = await readJSON(runFile); } catch { continue; }
+        if (!run) continue;
+
+        if (fromDate && new Date(run.startedAt) < fromDate) continue;
+        if (toDate   && new Date(run.startedAt) > toDate)   continue;
+
+        const steps = (run.steps || []).map(s => ({
+          agentId:   s.agentId   || s.id || '',
+          agentName: s.agentName || s.name || '',
+          agentType: s.agentType || s.type || '',
+          status:    s.status    || 'unknown',
+          usage:     s.usage || null,
+        }));
+
+        const totalUsage = run.totalUsage || steps.reduce(
+          (acc, s) => ({
+            inputTokens:      acc.inputTokens      + (s.usage?.inputTokens      || 0),
+            outputTokens:     acc.outputTokens     + (s.usage?.outputTokens     || 0),
+            estimatedCostUsd: acc.estimatedCostUsd + (s.usage?.estimatedCostUsd || 0),
+          }),
+          { inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 }
+        );
+
+        runs.push({
+          runId:       run.id || runEntry.name,
+          projectId:   project.id,
+          projectName: project.name,
+          storyKey:    run.storyKey || run.jiraStory || '',
+          startedAt:   run.startedAt  || null,
+          finishedAt:  run.finishedAt || null,
+          agentCount:  steps.length,
+          status:      run.status || 'unknown',
+          steps,
+          totalUsage,
+        });
+      }
+    }
+
+    runs.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
+
+    const aggregate = runs.reduce(
+      (acc, r) => ({
+        totalInputTokens:      acc.totalInputTokens      + (r.totalUsage?.inputTokens      || 0),
+        totalOutputTokens:     acc.totalOutputTokens     + (r.totalUsage?.outputTokens     || 0),
+        totalEstimatedCostUsd: acc.totalEstimatedCostUsd + (r.totalUsage?.estimatedCostUsd || 0),
+        runCount:              acc.runCount + 1,
+      }),
+      { totalInputTokens: 0, totalOutputTokens: 0, totalEstimatedCostUsd: 0, runCount: 0 }
+    );
+    aggregate.totalEstimatedCostUsd = parseFloat(aggregate.totalEstimatedCostUsd.toFixed(6));
+
+    res.json({ runs, aggregate });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 app.get('/api/status', (req, res) => {
 
 
