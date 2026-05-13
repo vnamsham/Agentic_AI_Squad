@@ -126,8 +126,9 @@ app.get('/api/usage', async (req, res) => {
       } catch { continue; }
 
       for (const runEntry of runEntries) {
-        if (!runEntry.isDirectory()) continue;
-        const runFile = join(runsDir, runEntry.name, 'run.json');
+        // Runs are written as flat `<runId>.json` files in the runs/ dir.
+        if (!runEntry.isFile() || !runEntry.name.endsWith('.json')) continue;
+        const runFile = join(runsDir, runEntry.name);
         let run = null;
         try { run = await readJSON(runFile); } catch { continue; }
         if (!run) continue;
@@ -204,7 +205,7 @@ app.get('/api/projects', async (req, res) => {
     const projects = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      const p = await getProject(entry.name);
+      const p = await readJSON(join(DATA_DIR, entry.name, 'project.json'));
       if (p) projects.push(p);
     }
     projects.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -720,19 +721,74 @@ app.post('/api/projects/:id/run-agent', async (req, res) => {
 
   const safeEmit = (event, data) => { if (!clientGone) emit(event, data); };
 
+  // Create a single-step run record so this agent execution appears in the Usage dashboard.
+  const runId = uuidv4();
+  const startedAt = new Date().toISOString();
+  const run = {
+    id: runId,
+    projectId: project.id,
+    projectName: project.name,
+    storyKey: storyKey.trim(),
+    jiraStory: storyKey.trim(),
+    status: 'running',
+    startedAt,
+    finishedAt: null,
+    completedAt: null,
+    steps: [{
+      agentId:   agent.id,
+      agentType: agent.type,
+      agentName: agent.name,
+      status:    'running',
+      output:    '',
+      startedAt,
+      completedAt: null,
+      usage: null,
+      model: null,
+    }],
+    result: null,
+    error: null,
+  };
+  const runsDir = join(projectDir(project), 'runs');
+  await mkdir(runsDir, { recursive: true });
+  const runFile = join(runsDir, `${runId}.json`);
+  try { await writeJSON(runFile, run); } catch {}
+
   try {
-    const output = await runSingleAgent(
+    const { output, usage, model } = await runSingleAgent(
       agent, project, storyKey.trim(), previousContext || [],
       (event, data) => safeEmit(event, data)
     );
+
+    const completedAt = new Date().toISOString();
+    run.status = 'completed';
+    run.completedAt = completedAt;
+    run.finishedAt  = completedAt;
+    run.steps[0].status = 'completed';
+    run.steps[0].output = output;
+    run.steps[0].completedAt = completedAt;
+    run.steps[0].usage = usage;
+    run.steps[0].model = model;
+    try { await writeJSON(runFile, run); } catch {}
 
     safeEmit('complete', {
       agentId,
       agentType: agent.type,
       output,
-      completedAt: new Date().toISOString()
+      usage,
+      model,
+      completedAt,
     });
   } catch (err) {
+    const completedAt = new Date().toISOString();
+    run.status = 'failed';
+    run.completedAt = completedAt;
+    run.finishedAt  = completedAt;
+    run.error = err.message;
+    run.steps[0].status = 'failed';
+    run.steps[0].error = err.message;
+    run.steps[0].completedAt = completedAt;
+    try { await writeJSON(runFile, run); } catch {}
+
     safeEmit('error', { agentId, error: err.message });
   }
 

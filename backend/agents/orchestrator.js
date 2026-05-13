@@ -157,8 +157,9 @@ ${fileList}
 // ─── Claude Streaming Call ───────────────────────────────────────────────────
 
 async function callClaude(systemPrompt, userMessage, onToken) {
+  const model = process.env.CLAUDE_MODEL || 'claude-opus-4-6';
   const stream = anthropic.messages.stream({
-    model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
+    model,
     max_tokens: 16000,
     system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }]
@@ -177,7 +178,21 @@ async function callClaude(systemPrompt, userMessage, onToken) {
     }
   }
 
-  return fullResponse;
+  let usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, estimatedCostUsd: 0 };
+  try {
+    const finalMessage = await stream.finalMessage();
+    const inputTokens     = finalMessage.usage?.input_tokens             || 0;
+    const outputTokens    = finalMessage.usage?.output_tokens            || 0;
+    const cacheReadTokens = finalMessage.usage?.cache_read_input_tokens  || 0;
+    usage = {
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      estimatedCostUsd: calcCost(inputTokens, outputTokens),
+    };
+  } catch { /* leave usage zeroed if SDK call fails */ }
+
+  return { text: fullResponse, usage, model };
 }
 
 // ─── File Parser & Saver ─────────────────────────────────────────────────────
@@ -572,7 +587,7 @@ ${gitContext}`;
     });
 
     try {
-      const output = await runAgent(agent, pipelineContext, emit);
+      const { output, usage, model } = await runAgent(agent, pipelineContext, emit);
 
       // Store output in pipeline context for next agent
       pipelineContext.previousOutputs[agent.type] = {
@@ -588,6 +603,8 @@ ${gitContext}`;
         stepIndex,
         status: 'completed',
         output,
+        usage,
+        model,
         completedAt: new Date().toISOString()
       });
 
@@ -612,7 +629,15 @@ ${gitContext}`;
         run.steps[stepIndex].status = 'completed';
         run.steps[stepIndex].output = output;
         run.steps[stepIndex].completedAt = new Date().toISOString();
+        run.steps[stepIndex].usage = usage;
+        run.steps[stepIndex].model = model;
       }
+
+      // Persist after every step so the Usage dashboard reflects partial progress.
+      try {
+        const runFile = join(DATA_DIR, project.dataFolder || project.id, 'runs', `${run.id}.json`);
+        await writeFile(runFile, JSON.stringify(run, null, 2), 'utf-8');
+      } catch { /* swallow disk-write errors */ }
 
       finalResult = output;
 
@@ -681,13 +706,13 @@ export async function runSingleAgent(agent, project, storyKey, previousContext, 
     }
   }
 
-  const output = await runAgent(agent, pipelineContext, emit, previousOutputsText);
+  const { output, usage, model } = await runAgent(agent, pipelineContext, emit, previousOutputsText);
 
   if (agent.type === 'developer-agent') {
     const savedFiles = await parseAndSaveFiles(output, project, null, emit);
     if (savedFiles.length > 0) {
-      const { testResults } = await executeGeneratedCode(savedFiles, baseDir, emit);
-      pipelineContext.testResults = testResults;
+      const result = await executeGeneratedCode(savedFiles, baseDir, emit);
+      pipelineContext.testResults = result?.testResults || null;
       pipelineContext.generatedCodeDir = baseDir;
     }
   }
@@ -696,7 +721,7 @@ export async function runSingleAgent(agent, project, storyKey, previousContext, 
     await createTestExcel(pipelineContext.testResults, project, storyKey, pipelineContext.generatedCodeDir, emit);
   }
 
-  return output;
+  return { output, usage, model };
 }
 
 // ─── Individual Agent Runner ─────────────────────────────────────────────────
@@ -720,7 +745,7 @@ async function runAgent(agent, pipelineContext, emit, previousOutputsOverride) {
 
   let fullOutput = '';
 
-  await callClaude(systemPrompt, userMessage, (token) => {
+  const { usage, model } = await callClaude(systemPrompt, userMessage, (token) => {
     fullOutput += token;
     emit('step_token', {
       agentId: agent.id,
@@ -729,7 +754,7 @@ async function runAgent(agent, pipelineContext, emit, previousOutputsOverride) {
     });
   });
 
-  return fullOutput;
+  return { output: fullOutput, usage, model };
 }
 
 // ─── Message Builder ─────────────────────────────────────────────────────────
