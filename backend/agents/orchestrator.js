@@ -17,6 +17,41 @@ const DATA_DIR = join(__dirname, '..', 'data');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+
+// ─── Cost Calculator ─────────────────────────────────────────────────────────
+
+const PRICING = {
+  opus:   { input: 15.00, output: 75.00,  cacheRead: 1.50 },
+  sonnet: { input:  3.00, output: 15.00,  cacheRead: 0.30 },
+  haiku:  { input:  0.25, output:  1.25,  cacheRead: 0.03 },
+};
+
+function computeCost(model, inputTokens, outputTokens, cacheReadTokens) {
+  let tier = PRICING.opus; // default
+  const m = (model || '').toLowerCase();
+  if (m.includes('sonnet')) tier = PRICING.sonnet;
+  else if (m.includes('haiku')) tier = PRICING.haiku;
+
+  const inputRate     = parseFloat(process.env.CLAUDE_OPUS_INPUT_USD_PER_MTOK  || tier.input);
+  const outputRate    = parseFloat(process.env.CLAUDE_OPUS_OUTPUT_USD_PER_MTOK || tier.output);
+  const cacheRate     = parseFloat(process.env.CLAUDE_OPUS_CACHE_READ_USD_PER_MTOK || tier.cacheRead);
+
+  // Use model-specific env vars when available
+  if (m.includes('sonnet')) {
+    const si = parseFloat(process.env.CLAUDE_SONNET_INPUT_USD_PER_MTOK || tier.input);
+    const so = parseFloat(process.env.CLAUDE_SONNET_OUTPUT_USD_PER_MTOK || tier.output);
+    const sc = parseFloat(process.env.CLAUDE_SONNET_CACHE_READ_USD_PER_MTOK || tier.cacheRead);
+    return (inputTokens * si + outputTokens * so + cacheReadTokens * sc) / 1_000_000;
+  }
+  if (m.includes('haiku')) {
+    const hi = parseFloat(process.env.CLAUDE_HAIKU_INPUT_USD_PER_MTOK || tier.input);
+    const ho = parseFloat(process.env.CLAUDE_HAIKU_OUTPUT_USD_PER_MTOK || tier.output);
+    const hc = parseFloat(process.env.CLAUDE_HAIKU_CACHE_READ_USD_PER_MTOK || tier.cacheRead);
+    return (inputTokens * hi + outputTokens * ho + cacheReadTokens * hc) / 1_000_000;
+  }
+  return (inputTokens * inputRate + outputTokens * outputRate + cacheReadTokens * cacheRate) / 1_000_000;
+}
+
 // ─── Template Loader ────────────────────────────────────────────────────────
 
 async function loadTemplate(templateType) {
