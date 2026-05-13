@@ -97,6 +97,128 @@ function computeStatus(project) {
 // ─── Status ───────────────────────────────────────────────────────────────────
 
 app.get('/api/status', (req, res) => {
+
+
+// ─── Usage & Cost ─────────────────────────────────────────────────────────────
+
+app.get('/api/usage', async (req, res) => {
+  try {
+    const { projectId } = req.query;
+
+    // Walk all project directories (same pattern as GET /api/projects)
+    const entries = await readdir(DATA_DIR, { withFileTypes: true }).catch(() => []);
+    const projectDirs = entries.filter(e => e.isDirectory() && e.name !== 'runs');
+
+    let allRuns = [];
+
+    await Promise.all(projectDirs.map(async (entry) => {
+      try {
+        const proj = await readJSON(join(DATA_DIR, entry.name, 'project.json'));
+        if (!proj) return;
+        // Filter by projectId if provided
+        if (projectId && proj.id !== projectId) return;
+
+        const runsDir = join(DATA_DIR, entry.name, 'runs');
+        let runEntries = [];
+        try {
+          runEntries = await readdir(runsDir, { withFileTypes: true });
+        } catch { return; }
+
+        // Limit to 200 most recent run directories per project to bound I/O
+        const runDirs = runEntries
+          .filter(e => e.isDirectory())
+          .slice(-200);
+
+        await Promise.all(runDirs.map(async (runEntry) => {
+          try {
+            const runFile = join(runsDir, runEntry.name, 'run.json');
+            const run = await readJSON(runFile);
+            if (!run) return;
+
+            const steps = Array.isArray(run.steps) ? run.steps : [];
+            let totalInput = 0, totalOutput = 0, totalCache = 0, totalCost = 0;
+            const stepDetail = steps.map(step => {
+              const u = step.usage || { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+              const c = step.costUsd || 0;
+              totalInput  += (u.inputTokens     || 0);
+              totalOutput += (u.outputTokens    || 0);
+              totalCache  += (u.cacheReadTokens || 0);
+              totalCost   += c;
+              return {
+                agentName: step.agentName || step.agent || '',
+                model:     step.model     || '',
+                usage:     u,
+                costUsd:   c,
+              };
+            });
+
+            allRuns.push({
+              runId:       run.id || runEntry.name,
+              projectId:   proj.id,
+              projectName: proj.name,
+              createdAt:   run.createdAt || '',
+              status:      run.status    || 'unknown',
+              stepCount:   steps.length,
+              totalTokens: totalInput + totalOutput + totalCache,
+              totalCostUsd: totalCost,
+              totalInputTokens:  totalInput,
+              totalOutputTokens: totalOutput,
+              stepDetail,
+            });
+          } catch { /* skip unreadable run */ }
+        }));
+      } catch { /* skip unreadable project */ }
+    }));
+
+    // Sort by createdAt desc
+    allRuns.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    // Summary totals
+    const summary = allRuns.reduce((acc, r) => {
+      acc.totalRuns         += 1;
+      acc.totalInputTokens  += r.totalInputTokens;
+      acc.totalOutputTokens += r.totalOutputTokens;
+      acc.totalCostUsd      += r.totalCostUsd;
+      return acc;
+    }, { totalRuns: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCostUsd: 0 });
+
+    // By-project aggregation
+    const byProjectMap = {};
+    for (const r of allRuns) {
+      if (!byProjectMap[r.projectId]) {
+        byProjectMap[r.projectId] = {
+          projectId:   r.projectId,
+          projectName: r.projectName,
+          runs:        0,
+          totalCostUsd: 0,
+          totalTokens:  0,
+        };
+      }
+      byProjectMap[r.projectId].runs         += 1;
+      byProjectMap[r.projectId].totalCostUsd += r.totalCostUsd;
+      byProjectMap[r.projectId].totalTokens  += r.totalTokens;
+    }
+    const byProject = Object.values(byProjectMap)
+      .sort((a, b) => b.totalCostUsd - a.totalCostUsd);
+
+    // Recent runs (last 50)
+    const recentRuns = allRuns.slice(0, 50).map(r => ({
+      runId:       r.runId,
+      projectId:   r.projectId,
+      projectName: r.projectName,
+      createdAt:   r.createdAt,
+      status:      r.status,
+      steps:       r.stepCount,
+      totalTokens: r.totalTokens,
+      totalCostUsd: r.totalCostUsd,
+      stepDetail:  r.stepDetail,
+    }));
+
+    res.json({ summary, byProject, recentRuns });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
   res.json({
     status: 'ok',
     version: '1.0.0',
