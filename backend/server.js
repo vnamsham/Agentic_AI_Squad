@@ -96,6 +96,120 @@ function computeStatus(project) {
 
 // ─── Status ───────────────────────────────────────────────────────────────────
 
+
+// ─── Usage ────────────────────────────────────────────────────────────────────
+
+app.get('/api/usage/runs', async (req, res) => {
+  try {
+    const entries = await readdir(DATA_DIR, { withFileTypes: true }).catch(() => []);
+    const allRuns = [];
+    let totalInputTokens  = 0;
+    let totalOutputTokens = 0;
+    let totalCostUsd      = 0;
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === 'runs') continue;
+      let project = null;
+      try {
+        project = await readJSON(join(DATA_DIR, entry.name, 'project.json'));
+      } catch { continue; }
+      if (!project) continue;
+
+      const runsDir = join(DATA_DIR, entry.name, 'runs');
+      let runEntries = [];
+      try {
+        runEntries = await readdir(runsDir, { withFileTypes: true });
+      } catch { continue; }
+
+      for (const runEntry of runEntries) {
+        if (!runEntry.isDirectory()) continue;
+        try {
+          const runData = await readJSON(join(runsDir, runEntry.name, 'run.json'));
+          if (!runData) continue;
+
+          const steps = Array.isArray(runData.steps) ? runData.steps : [];
+          let runInput  = 0;
+          let runOutput = 0;
+          let runCost   = 0;
+          for (const step of steps) {
+            runInput  += step.usage?.inputTokens      ?? 0;
+            runOutput += step.usage?.outputTokens     ?? 0;
+            runCost   += step.usage?.estimatedCostUsd ?? 0;
+          }
+
+          totalInputTokens  += runInput;
+          totalOutputTokens += runOutput;
+          totalCostUsd      += runCost;
+
+          allRuns.push({
+            runId:             runData.id   || runEntry.name,
+            projectId:         project.id,
+            projectName:       project.name,
+            storyKey:          runData.storyKey || runData.jiraStory || '',
+            startedAt:         runData.startedAt || runData.createdAt || '',
+            status:            runData.status || 'unknown',
+            stepCount:         steps.length,
+            totalInputTokens:  runInput,
+            totalOutputTokens: runOutput,
+            totalCostUsd:      runCost,
+          });
+        } catch { /* skip unreadable runs */ }
+      }
+    }
+
+    allRuns.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
+
+    res.json({
+      runs: allRuns,
+      summary: {
+        runCount:          allRuns.length,
+        totalInputTokens,
+        totalOutputTokens,
+        totalCostUsd,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/usage/runs/:projectId/:runId', async (req, res) => {
+  try {
+    const project = await getProject(req.params.projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const runPath = join(projectDir(project), 'runs', req.params.runId, 'run.json');
+    const runData = await readJSON(runPath);
+    if (!runData) return res.status(404).json({ error: 'Run not found' });
+
+    const steps = (Array.isArray(runData.steps) ? runData.steps : []).map((step, i) => ({
+      stepIndex:        i + 1,
+      agentId:          step.agentId   || '',
+      agentName:        step.agentName || step.name || `Step ${i + 1}`,
+      agentType:        step.agentType || step.type || '',
+      inputTokens:      step.usage?.inputTokens      ?? 0,
+      outputTokens:     step.usage?.outputTokens     ?? 0,
+      estimatedCostUsd: step.usage?.estimatedCostUsd ?? 0,
+      startedAt:        step.startedAt  || '',
+      duration:         step.duration   || null,
+    }));
+
+    res.json({
+      run: {
+        id:          runData.id,
+        projectId:   project.id,
+        projectName: project.name,
+        storyKey:    runData.storyKey || runData.jiraStory || '',
+        startedAt:   runData.startedAt || runData.createdAt || '',
+        status:      runData.status || 'unknown',
+      },
+      steps,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/status', (req, res) => {
   res.json({
     status: 'ok',
