@@ -260,3 +260,9 @@ export function useApp() {
   if (!ctx) throw new Error('useApp must be used inside AppProvider');
   return ctx;
 }
+
+
+// [REPLACE:   page: 'dashboard',          // dashboard | workflow | agent-studio | agents | templates]
+//   page: 'dashboard',          // dashboard | workflow | agent-studio | agents | templates
+// ===
+  page: 'dashboard',          // dashboard | workflow | agent-studio | agents | templates | usage
