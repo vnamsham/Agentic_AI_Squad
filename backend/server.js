@@ -758,6 +758,26 @@ app.post('/api/projects/:id/run', async (req, res) => {
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
 
+
+// [REPLACE:     const projects = [];
+//     for (const entry of entries) {
+//       if (!entry.isDirectory()) continue;
+//       const p = await getProject(entry.name);
+//       if (p) projects.push(p);
+//     }]
+// ===
+    const projects = [];
+    const seen = new Set();
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const p = await readJSON(join(DATA_DIR, entry.name, 'project.json'));
+        if (p && p.id && !seen.has(p.id)) {
+          seen.add(p.id);
+          projects.push(p);
+        }
+      } catch {}
+    }
 app.listen(PORT, () => {
   console.log(`\n🤖 Agent AI Squad Backend`);
   console.log(`   Running at: http://localhost:${PORT}`);
