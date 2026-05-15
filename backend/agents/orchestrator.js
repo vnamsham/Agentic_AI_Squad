@@ -17,6 +17,28 @@ const DATA_DIR = join(__dirname, '..', 'data');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+
+// ─── Pricing Table ───────────────────────────────────────────────────────────
+// PRICING — last updated 2025-01 — verify at https://www.anthropic.com/pricing
+const PRICING_TABLE = {
+  'claude-opus-4':    { inputPer1M: 15.00, outputPer1M: 75.00 },
+  'claude-sonnet-4':  { inputPer1M:  3.00, outputPer1M: 15.00 },
+  'claude-haiku-4':   { inputPer1M:  0.80, outputPer1M:  4.00 },
+  'claude-opus-3-5':  { inputPer1M: 15.00, outputPer1M: 75.00 },
+  'claude-sonnet-3-5':{ inputPer1M:  3.00, outputPer1M: 15.00 },
+  'claude-haiku-3-5': { inputPer1M:  0.80, outputPer1M:  4.00 },
+  'claude-3-opus':    { inputPer1M: 15.00, outputPer1M: 75.00 },
+  'claude-3-sonnet':  { inputPer1M:  3.00, outputPer1M: 15.00 },
+  'claude-3-haiku':   { inputPer1M:  0.25, outputPer1M:  1.25 },
+};
+
+function computeCost(model, inputTokens, outputTokens) {
+  const key = Object.keys(PRICING_TABLE).find(k => model.includes(k));
+  if (!key) return 0;
+  const { inputPer1M, outputPer1M } = PRICING_TABLE[key];
+  return (inputTokens * inputPer1M + outputTokens * outputPer1M) / 1_000_000;
+}
+
 // ─── Template Loader ────────────────────────────────────────────────────────
 
 async function loadTemplate(templateType) {
