@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+
+import UsageDashboard from './UsageDashboard.jsx';
 import { useApp } from '../AppContext.jsx';
 import { Btn, Modal, ModalHeader, ModalBody, ModalFooter, SectionLabel, Tag, fmtDateTime, getAgentMeta } from './UI.jsx';
 import * as api from '../client.js';
