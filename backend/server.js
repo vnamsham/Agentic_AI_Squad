@@ -518,6 +518,8 @@ app.get('/api/projects/:id/runs', async (req, res) => {
 });
 
 app.get('/api/projects/:id/runs/:runId', async (req, res) => {
+
+
   try {
     const project = await getProject(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
