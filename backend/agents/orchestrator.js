@@ -725,3 +725,36 @@ Provide a thorough, structured output that the next agent in the pipeline can us
 
   return parts.join('\n');
 }
+
+
+// [REPLACE: async function callClaude(systemPrompt, userMessage, onToken) {]
+// async function callClaude(systemPrompt, userMessage, onToken) {
+// ===
+async function callClaude(systemPrompt, userMessage, onToken) {
+
+// [REPLACE:  let fullResponse = '';\n\n  for await (const event of stream) {]
+//   let fullResponse = '';
+//
+//   for await (const event of stream) {
+// ===
+  let fullResponse = '';
+
+  for await (const event of stream) {
+
+// [REPLACE:  return fullResponse;]
+//   return fullResponse;
+// ===
+  // Extract usage after streaming completes — does not affect streaming UX
+  let usage = { inputTokens: 0, outputTokens: 0, model: 'unknown' };
+  try {
+    const finalMsg = await stream.finalMessage();
+    usage = {
+      inputTokens:  finalMsg.usage?.input_tokens  || 0,
+      outputTokens: finalMsg.usage?.output_tokens || 0,
+      model:        finalMsg.model || (process.env.CLAUDE_MODEL || 'claude-opus-4-6'),
+    };
+  } catch (usageErr) {
+    console.warn('[orchestrator] Failed to capture usage from finalMessage():', usageErr.message);
+  }
+
+  return { response: fullResponse, usage };
