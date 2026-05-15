@@ -17,6 +17,42 @@ const DATA_DIR = join(__dirname, '..', 'data');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+
+// ─── Pricing Constants (USD per million tokens) ───────────────────────────────
+const PRICING = {
+  opus:    { input: parseFloat(process.env.COST_INPUT_PER_M_OPUS   ?? '15'),   output: parseFloat(process.env.COST_OUTPUT_PER_M_OPUS   ?? '75')   },
+  sonnet:  { input: parseFloat(process.env.COST_INPUT_PER_M_SONNET ?? '3'),    output: parseFloat(process.env.COST_OUTPUT_PER_M_SONNET ?? '15')   },
+  haiku:   { input: parseFloat(process.env.COST_INPUT_PER_M_HAIKU  ?? '0.25'), output: parseFloat(process.env.COST_OUTPUT_PER_M_HAIKU  ?? '1.25') },
+};
+
+function computeStepCost(usage, model) {
+  const m = (model || '').toLowerCase();
+  const rates = m.includes('opus') ? PRICING.opus : m.includes('haiku') ? PRICING.haiku : PRICING.sonnet;
+  const inputTokens  = usage?.input_tokens  ?? 0;
+  const outputTokens = usage?.output_tokens ?? 0;
+  const costUsd = (inputTokens / 1_000_000) * rates.input + (outputTokens / 1_000_000) * rates.output;
+  return { inputTokens, outputTokens, costUsd };
+}
+
+async function saveStepUsage(project, runId, stepRecord) {
+  if (!runId) return; // single-agent runs without a persisted runId skip persistence
+  const projectFolder = project.dataFolder || project.id;
+  const runPath = join(DATA_DIR, projectFolder, 'runs', runId, 'run.json');
+  try {
+    const raw = await readFile(runPath, 'utf-8').catch(() => '{}');
+    const run = JSON.parse(raw);
+    if (!Array.isArray(run.steps)) run.steps = [];
+    const idx = run.steps.findIndex(s => s.agentId === stepRecord.agentId);
+    if (idx >= 0) run.steps[idx] = stepRecord;
+    else run.steps.push(stepRecord);
+    const tmp = runPath + '.tmp';
+    await writeFile(tmp, JSON.stringify(run, null, 2), 'utf-8');
+    await rename(tmp, runPath);
+  } catch (err) {
+    console.warn('saveStepUsage failed:', err.message);
+  }
+}
+
 // ─── Template Loader ────────────────────────────────────────────────────────
 
 async function loadTemplate(templateType) {
