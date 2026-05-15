@@ -122,6 +122,16 @@ async function callClaude(systemPrompt, userMessage, onToken) {
 
   let fullResponse = '';
 
+
+  const stream = anthropic.messages.stream({
+    model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
+    max_tokens: 16000,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userMessage }]
+  });
+
+  let fullResponse = '';
+
   for await (const event of stream) {
     if (
       event.type === 'content_block_delta' &&
