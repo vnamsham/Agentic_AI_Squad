@@ -21,6 +21,24 @@ const TEMPLATES_DIR = join(__dirname, 'templates');
 
 const AGENT_TYPES = ['lead-agent', 'developer-agent', 'tester-agent', 'regression-agent'];
 
+
+// Cost rates in USD per 1,000,000 tokens
+const COST_RATES = {
+  'claude-opus-4-5':   { input: 15.00, output: 75.00 },
+  'claude-opus-4-6':   { input: 15.00, output: 75.00 },
+  'claude-sonnet-4-5': { input: 3.00,  output: 15.00 },
+  'claude-haiku-3-5':  { input: 0.80,  output: 4.00  },
+  'claude-haiku-3':    { input: 0.25,  output: 1.25  },
+  'default':           { input: 15.00, output: 75.00 },
+};
+
+function computeStepCost(inputTokens, outputTokens, model) {
+  if (!inputTokens && !outputTokens) return 0;
+  const rates = COST_RATES[model] || COST_RATES['default'];
+  return (inputTokens / 1_000_000) * rates.input
+       + (outputTokens / 1_000_000) * rates.output;
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
