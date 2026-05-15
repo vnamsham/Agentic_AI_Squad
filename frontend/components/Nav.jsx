@@ -4,6 +4,12 @@ import accentureLogo from '../src/accenture-logo.ico';
 
 const PROJECT_PAGES = ['workflow', 'agent-studio', 'agents'];
 
+
+// [REPLACE:     { id: 'templates',    label: 'Templates' },]
+//     { id: 'templates',    label: 'Templates' },
+// ===
+    { id: 'templates',    label: 'Templates' },
+    { id: 'usage',        label: 'Usage & Cost' },
 export default function Nav() {
   const { state, actions } = useApp();
   const serverOk = state.serverStatus?.ok;
