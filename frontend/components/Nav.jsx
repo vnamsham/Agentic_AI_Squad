@@ -14,8 +14,6 @@ export default function Nav() {
     { id: 'workflow',     label: 'Workflow' },
     { id: 'agents',       label: 'Agent Studio' },
     { id: 'templates',    label: 'Templates' },
-
-    { id: 'usage',        label: 'Usage & Cost' },
   ];
 
   return (

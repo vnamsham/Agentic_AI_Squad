@@ -78,7 +78,7 @@ export default function RunsTable({ runs, loading }) {
                     <td style={{ fontWeight: 600 }}>{run.storyKey || '—'}</td>
                     <td>{run.projectName}</td>
                     <td style={{ color: 'var(--text3)' }}>{fmtDate(run.startedAt)}</td>
-                    <td style={{ textAlign: 'center' }}>{run.agentCount}</td>
+                    <td>{(run.steps || []).map(s => s.agentName).filter(Boolean).join(', ') || '—'}</td>
                     <td>{fmt(u?.inputTokens)}</td>
                     <td>{fmt(u?.outputTokens)}</td>
                     <td style={{ fontWeight: 600 }}>{fmtCost(u?.estimatedCostUsd)}</td>

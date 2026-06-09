@@ -7,8 +7,6 @@ import AgentStudio from './components/AgentStudio.jsx';
 import Agents from './components/Agents.jsx';
 import Templates from './components/Templates.jsx';
 
-import UsageDashboard from './components/UsageDashboard.jsx';
-
 function AppShell() {
   const { state, actions } = useApp();
 
